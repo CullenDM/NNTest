@@ -149,7 +149,7 @@ struct TernaryFeedForward {
 struct LatentMemory {
   int capacity = 0;
   int dim = 0;
-  std::vector<float> bank;
+  std::vector<int16_t> bank;
   int ptr = 0;
   bool full = false;
   std::vector<float> gate_weight;
