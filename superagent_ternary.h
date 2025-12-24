@@ -44,6 +44,13 @@ struct Tensor3 {
   Tensor3() = default;
   Tensor3(int b, int s, int h) : B(b), S(s), H(h), data(static_cast<size_t>(b) * s * h, 0.0f) {}
 
+  inline void resize(int b, int s, int h) {
+    B = b;
+    S = s;
+    H = h;
+    data.assign(static_cast<size_t>(b) * s * h, 0.0f);
+  }
+
   inline float &at(int b, int s, int h) {
     return data[(static_cast<size_t>(b) * S + s) * H + h];
   }
@@ -168,6 +175,7 @@ struct LatentMemory {
 struct SuperAgent {
   TernaryConfig cfg;
   std::vector<float> byte_embed;
+  std::vector<int16_t> work;
   TernarymLSTMCell encoder;
   TernaryLinear enc_proj;
   LatentMemory memory;
@@ -179,9 +187,30 @@ struct SuperAgent {
   TernarymLSTMCell decoder;
   TernaryLinear head;
   std::vector<float> global_bos;
+  std::vector<int16_t> enc_C;
+  std::vector<int16_t> enc_n;
+  std::vector<int16_t> dec_C;
+  std::vector<int16_t> dec_n;
+  std::vector<float> bos_proj;
+  Tensor3 buf_x_emb;
+  Tensor3 buf_enc_feats;
+  Tensor3 buf_enc_p;
+  Tensor3 buf_latents;
+  Tensor3 buf_latents_proj;
+  Tensor3 buf_norm1;
+  Tensor3 buf_attn_out;
+  Tensor3 buf_norm2;
+  Tensor3 buf_ff_out;
+  Tensor3 buf_ctx_proj_out;
+  Tensor3 buf_ctx_byte;
+  Tensor3 buf_x_emb_p;
+  Tensor3 buf_dec_in;
+  Tensor3 buf_dec_out;
+  Tensor3 buf_logits_full;
 
   explicit SuperAgent(const TernaryConfig &config);
   void forward(const std::vector<uint8_t> &byte_input, int B, int S, Tensor3 &logits, Tensor3 &x_glob, bool update_memory);
+  void forward_streaming(const std::vector<uint8_t> &byte_input, int S, std::vector<float> &logits, std::vector<float> &x_glob, bool update_memory);
 };
 
 }  // namespace superagent
