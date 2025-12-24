@@ -1,8 +1,56 @@
 #include "superagent_ternary.h"
 
+#include <array>
 #include <limits>
 
 namespace superagent {
+
+namespace {
+
+constexpr float kSigmoidLutMin = -8.0f;
+constexpr float kSigmoidLutMax = 8.0f;
+constexpr float kExpLutMin = -8.0f;
+constexpr float kExpLutMax = 0.0f;
+constexpr int kLutSize = 256;
+
+struct TernaryLut {
+  std::array<uint16_t, kLutSize> sigmoid_q15{};
+  std::array<uint16_t, kLutSize> exp_q15{};
+
+  TernaryLut() {
+    for (int i = 0; i < kLutSize; ++i) {
+      const float t = static_cast<float>(i) / static_cast<float>(kLutSize - 1);
+      const float sigmoid_x = kSigmoidLutMin + t * (kSigmoidLutMax - kSigmoidLutMin);
+      const float sigmoid_v = 1.0f / (1.0f + std::exp(-sigmoid_x));
+      sigmoid_q15[static_cast<size_t>(i)] =
+          static_cast<uint16_t>(std::min<float>(kQ15Scale, std::lround(sigmoid_v * kQ15Scale)));
+
+      const float exp_x = kExpLutMin + t * (kExpLutMax - kExpLutMin);
+      const float exp_v = std::exp(exp_x);
+      exp_q15[static_cast<size_t>(i)] =
+          static_cast<uint16_t>(std::min<float>(kQ15Scale, std::lround(exp_v * kQ15Scale)));
+    }
+  }
+};
+
+inline int lut_index(float x, float min_v, float max_v) {
+  const float clamped = std::max(min_v, std::min(max_v, x));
+  const float scaled = (clamped - min_v) / (max_v - min_v);
+  const int idx = static_cast<int>(std::lround(scaled * static_cast<float>(kLutSize - 1)));
+  return std::max(0, std::min(kLutSize - 1, idx));
+}
+
+inline uint16_t lut_sigmoid_q15(float x) {
+  static const TernaryLut lut;
+  return lut.sigmoid_q15[static_cast<size_t>(lut_index(x, kSigmoidLutMin, kSigmoidLutMax))];
+}
+
+inline uint16_t lut_exp_q15(float x) {
+  static const TernaryLut lut;
+  return lut.exp_q15[static_cast<size_t>(lut_index(x, kExpLutMin, kExpLutMax))];
+}
+
+}  // namespace
 
 static inline float fast_gelu(float x) {
   return 0.5f * x * (1.0f + std::tanh(0.79788456f * (x + 0.044715f * x * x * x)));
@@ -127,7 +175,7 @@ void IntSoftmax::forward(const std::vector<float> &x, int rows, int cols, std::v
     for (int c = 0; c < cols; ++c) {
       float v = x[static_cast<size_t>(r) * cols + c] - max_v;
       v = std::max(clamp_min, std::min(clamp_max, v));
-      const float e = std::exp(v);
+      const float e = static_cast<float>(lut_exp_q15(v)) / static_cast<float>(kQ15Scale);
       out[static_cast<size_t>(r) * cols + c] = e;
       sum += e;
     }
@@ -233,8 +281,8 @@ void TernarymLSTMCell::forward(const Tensor3 &x, Tensor3 &h_out, std::vector<int
     for (int s = 0; s < x.S; ++s) {
       const float g0 = gates.at(b, s, 0);
       const float g1 = gates.at(b, s, 1);
-      const float i = std::exp(-std::log1p(std::exp(-g0)));
-      const float f = std::exp(-std::log1p(std::exp(-g1)));
+      const float i = static_cast<float>(lut_sigmoid_q15(g0)) / static_cast<float>(kQ15Scale);
+      const float f = static_cast<float>(lut_sigmoid_q15(g1)) / static_cast<float>(kQ15Scale);
       i_gate.at(b, s, 0) = i;
       f_gate.at(b, s, 0) = f;
     }
@@ -485,7 +533,7 @@ void LatentMemory::read_and_inject(const Tensor3 &x, Tensor3 &out) const {
           gate += gate_weight[w_base + static_cast<size_t>(d)] * x.at(b, s, d);
           gate += gate_weight[w_base + static_cast<size_t>(dim) + d] * retrieved[static_cast<size_t>(d)];
         }
-        gate = 1.0f / (1.0f + std::exp(-gate));
+        gate = static_cast<float>(lut_sigmoid_q15(gate)) / static_cast<float>(kQ15Scale);
         out.at(b, s, h) = x.at(b, s, h) + gate * retrieved[static_cast<size_t>(h)];
       }
     }
