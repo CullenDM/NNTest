@@ -200,6 +200,10 @@ static inline int32_t float_to_q15(float v) {
   return static_cast<int32_t>(clamped);
 }
 
+static inline float q15_to_float(int16_t v) {
+  return static_cast<float>(v) / static_cast<float>(kQ15Scale);
+}
+
 static void mlstm_scan(const Tensor3 &q, const Tensor3 &k, const Tensor3 &v,
                        const Tensor3 &i_gate, const Tensor3 &f_gate,
                        std::vector<int16_t> &C, std::vector<int16_t> &n,
@@ -480,7 +484,8 @@ void LatentMemory::write(const Tensor3 &latents) {
   }
   for (int b = 0; b < gist.B; ++b) {
     for (int h = 0; h < dim; ++h) {
-      bank[static_cast<size_t>(ptr) * dim + h] = gist.at(b, 0, h);
+      const int32_t q15 = float_to_q15(gist.at(b, 0, h));
+      bank[static_cast<size_t>(ptr) * dim + h] = clamp_q15(q15);
     }
     ptr = (ptr + 1) % capacity;
     if (ptr == 0) {
@@ -503,7 +508,8 @@ void LatentMemory::read_and_inject(const Tensor3 &x, Tensor3 &out) const {
       for (int m = 0; m < mem_size; ++m) {
         float dot = 0.0f;
         for (int h = 0; h < x.H; ++h) {
-          dot += x.at(b, s, h) * bank[static_cast<size_t>(m) * dim + h];
+          const float mem_val = q15_to_float(bank[static_cast<size_t>(m) * dim + h]);
+          dot += x.at(b, s, h) * mem_val;
         }
         dot /= std::sqrt(static_cast<float>(x.H));
         weights[static_cast<size_t>(m)] = dot;
@@ -522,7 +528,8 @@ void LatentMemory::read_and_inject(const Tensor3 &x, Tensor3 &out) const {
       for (int h = 0; h < x.H; ++h) {
         float acc = 0.0f;
         for (int m = 0; m < mem_size; ++m) {
-          acc += weights[static_cast<size_t>(m)] * bank[static_cast<size_t>(m) * dim + h];
+          const float mem_val = q15_to_float(bank[static_cast<size_t>(m) * dim + h]);
+          acc += weights[static_cast<size_t>(m)] * mem_val;
         }
         retrieved[static_cast<size_t>(h)] = acc;
       }
