@@ -1,0 +1,36 @@
+Model summary (from config/weights):
+  vocab_size=8
+  byte_embed_dim=4
+  enc_mlstm_dim=4
+  dec_mlstm_dim=4
+  hidden_dim=8
+  physical_depth=1
+  logical_loops=1
+  num_heads=2
+  block_size=2
+  top_k_blocks=1
+  local_window_blocks=1
+  index_num_heads=1
+  index_head_dim=2
+  memory_capacity=4
+  byte_embed params=32
+  encoder qkv params=48
+  encoder if params=8
+  enc_proj params=64
+  ctx_proj params=32
+  decoder qkv params=96
+  decoder if params=16
+  head params=32
+  memory gate params=128
+  attention blocks=1
+  ff blocks=1
+Resource profile (estimated):
+  ternary weight params=648 (162 bytes)
+  float params=248 (992 bytes)
+  total params bytes=1154
+  activation elements=296
+  activation bytes (float)=1184
+  activation bytes (int8, theoretical)=296
+Logits shape: B=1 S=4 H=8
+First token logits: 1.1, -1.9, 1.1, 1.1, -1.9, 1.1, 1.1, -1.9
+Global latents shape: B=1 S=2 H=8
