@@ -25,9 +25,9 @@ Model summary (from config/weights):
   attention blocks=1
   ff blocks=1
 Resource profile (estimated):
-  ternary weight params=648 (162 bytes)
+  ternary weight params=648 (648 bytes)
   float params=248 (992 bytes)
-  total params bytes=1154
+  total params bytes=1640
   activation elements=296
   activation bytes (float)=1184
   activation bytes (int8, theoretical)=296

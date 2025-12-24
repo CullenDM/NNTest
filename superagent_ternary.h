@@ -8,6 +8,9 @@
 
 namespace superagent {
 
+// Q15 fixed-point scale for mLSTM C/n states (value = q15 / kQ15Scale).
+constexpr int32_t kQ15Scale = 32768;
+
 struct TernaryConfig {
   int vocab_size = 256;
   int compression_rate = 4;
@@ -41,6 +44,13 @@ struct Tensor3 {
   Tensor3() = default;
   Tensor3(int b, int s, int h) : B(b), S(s), H(h), data(static_cast<size_t>(b) * s * h, 0.0f) {}
 
+  inline void resize(int b, int s, int h) {
+    B = b;
+    S = s;
+    H = h;
+    data.assign(static_cast<size_t>(b) * s * h, 0.0f);
+  }
+
   inline float &at(int b, int s, int h) {
     return data[(static_cast<size_t>(b) * S + s) * H + h];
   }
@@ -54,21 +64,16 @@ struct TernaryLinear {
   int out_f = 0;
   bool quantize_act = true;
   float threshold = 0.5f;
-  size_t weight_count = 0;
-  std::vector<uint8_t> weight_packed;  // 2-bit packed weights (00=0, 01=+1, 10=-1)
+  std::vector<uint8_t> weight_packed;  // 4 ternary weights per byte
   std::vector<float> bias;
 
   TernaryLinear() = default;
   TernaryLinear(int in_features, int out_features, bool use_bias = true, bool quantize_act_in = true, float threshold_in = 0.5f)
       : in_f(in_features), out_f(out_features), quantize_act(quantize_act_in), threshold(threshold_in),
-        weight_count(static_cast<size_t>(out_features) * in_features),
-        weight_packed((weight_count + 3) / 4, 0),
+        weight_packed((static_cast<size_t>(out_features) * in_features + 3) / 4, 0),
         bias(use_bias ? static_cast<size_t>(out_features) : 0, 0.0f) {}
 
   void set_weight_ternary(const std::vector<float> &w, float threshold);
-  void set_weight_value(size_t idx, int8_t value);
-  int8_t get_weight_value(size_t idx) const;
-  size_t packed_size() const { return weight_packed.size(); }
   void forward(const Tensor3 &x, Tensor3 &out) const;
 };
 
@@ -98,7 +103,7 @@ struct TernarymLSTMCell {
         W_qkv(in_dim, hid_dim * 3, true, true, threshold),
         W_if(in_dim, 2, true, true, threshold) {}
 
-  void forward(const Tensor3 &x, Tensor3 &h_out, std::vector<float> &C, std::vector<float> &n) const;
+  void forward(const Tensor3 &x, Tensor3 &h_out, std::vector<int16_t> &C, std::vector<int16_t> &n) const;
 };
 
 struct TernaryLightningIndexer {
@@ -151,7 +156,7 @@ struct TernaryFeedForward {
 struct LatentMemory {
   int capacity = 0;
   int dim = 0;
-  std::vector<float> bank;
+  std::vector<int16_t> bank;
   int ptr = 0;
   bool full = false;
   std::vector<float> gate_weight;
@@ -170,6 +175,7 @@ struct LatentMemory {
 struct SuperAgent {
   TernaryConfig cfg;
   std::vector<float> byte_embed;
+  std::vector<int16_t> work;
   TernarymLSTMCell encoder;
   TernaryLinear enc_proj;
   LatentMemory memory;
@@ -181,9 +187,30 @@ struct SuperAgent {
   TernarymLSTMCell decoder;
   TernaryLinear head;
   std::vector<float> global_bos;
+  std::vector<int16_t> enc_C;
+  std::vector<int16_t> enc_n;
+  std::vector<int16_t> dec_C;
+  std::vector<int16_t> dec_n;
+  std::vector<float> bos_proj;
+  Tensor3 buf_x_emb;
+  Tensor3 buf_enc_feats;
+  Tensor3 buf_enc_p;
+  Tensor3 buf_latents;
+  Tensor3 buf_latents_proj;
+  Tensor3 buf_norm1;
+  Tensor3 buf_attn_out;
+  Tensor3 buf_norm2;
+  Tensor3 buf_ff_out;
+  Tensor3 buf_ctx_proj_out;
+  Tensor3 buf_ctx_byte;
+  Tensor3 buf_x_emb_p;
+  Tensor3 buf_dec_in;
+  Tensor3 buf_dec_out;
+  Tensor3 buf_logits_full;
 
   explicit SuperAgent(const TernaryConfig &config);
   void forward(const std::vector<uint8_t> &byte_input, int B, int S, Tensor3 &logits, Tensor3 &x_glob, bool update_memory);
+  void forward_streaming(const std::vector<uint8_t> &byte_input, int S, std::vector<float> &logits, std::vector<float> &x_glob, bool update_memory);
 };
 
 }  // namespace superagent

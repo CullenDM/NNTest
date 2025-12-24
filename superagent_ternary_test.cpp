@@ -11,14 +11,14 @@ using superagent::TernaryLinear;
 using superagent::Tensor3;
 
 static void fill_ternary(TernaryLinear &layer) {
-  for (size_t i = 0; i < layer.weight_count; ++i) {
+  for (size_t i = 0; i < layer.weight.size(); ++i) {
     const int mod = static_cast<int>(i % 3);
     if (mod == 0) {
-      layer.set_weight_value(i, 1);
+      layer.weight[i] = 1;
     } else if (mod == 1) {
-      layer.set_weight_value(i, 0);
+      layer.weight[i] = 0;
     } else {
-      layer.set_weight_value(i, -1);
+      layer.weight[i] = -1;
     }
   }
   for (size_t i = 0; i < layer.bias.size(); ++i) {
@@ -77,13 +77,13 @@ static void print_model_summary(const SuperAgent &agent, std::ostream &os) {
   os << "  index_head_dim=" << cfg.index_head_dim << "\n";
   os << "  memory_capacity=" << cfg.memory_capacity << "\n";
   os << "  byte_embed params=" << agent.byte_embed.size() << "\n";
-  os << "  encoder qkv params=" << agent.encoder.W_qkv.weight_count << "\n";
-  os << "  encoder if params=" << agent.encoder.W_if.weight_count << "\n";
-  os << "  enc_proj params=" << agent.enc_proj.weight_count << "\n";
-  os << "  ctx_proj params=" << agent.ctx_proj.weight_count << "\n";
-  os << "  decoder qkv params=" << agent.decoder.W_qkv.weight_count << "\n";
-  os << "  decoder if params=" << agent.decoder.W_if.weight_count << "\n";
-  os << "  head params=" << agent.head.weight_count << "\n";
+  os << "  encoder qkv params=" << agent.encoder.W_qkv.weight.size() << "\n";
+  os << "  encoder if params=" << agent.encoder.W_if.weight.size() << "\n";
+  os << "  enc_proj params=" << agent.enc_proj.weight.size() << "\n";
+  os << "  ctx_proj params=" << agent.ctx_proj.weight.size() << "\n";
+  os << "  decoder qkv params=" << agent.decoder.W_qkv.weight.size() << "\n";
+  os << "  decoder if params=" << agent.decoder.W_if.weight.size() << "\n";
+  os << "  head params=" << agent.head.weight.size() << "\n";
   os << "  memory gate params=" << agent.memory.gate_weight.size() << "\n";
   os << "  attention blocks=" << agent.attn.size() << "\n";
   os << "  ff blocks=" << agent.ff.size() << "\n";
@@ -95,7 +95,7 @@ struct ParamStats {
 };
 
 static void add_linear_params(const TernaryLinear &layer, ParamStats &stats) {
-  stats.ternary_weights += layer.weight_count;
+  stats.ternary_weights += layer.weight.size();
   stats.float_params += layer.bias.size();
 }
 
@@ -157,21 +157,7 @@ static size_t estimate_forward_activation_elems(const TernaryConfig &cfg, int B,
 
 static void print_resource_profile(const SuperAgent &agent, int B, int S, std::ostream &os) {
   const ParamStats stats = count_parameters(agent);
-  size_t ternary_bytes = 0;
-  ternary_bytes += agent.encoder.W_qkv.packed_size();
-  ternary_bytes += agent.encoder.W_if.packed_size();
-  ternary_bytes += agent.enc_proj.packed_size();
-  ternary_bytes += agent.ctx_proj.packed_size();
-  ternary_bytes += agent.decoder.W_qkv.packed_size();
-  ternary_bytes += agent.decoder.W_if.packed_size();
-  ternary_bytes += agent.head.packed_size();
-  for (size_t i = 0; i < agent.attn.size(); ++i) {
-    ternary_bytes += agent.attn[i].qkv.packed_size();
-    ternary_bytes += agent.attn[i].out.packed_size();
-    ternary_bytes += agent.attn[i].indexer.W_qI.packed_size();
-    ternary_bytes += agent.attn[i].indexer.W_kI.packed_size();
-    ternary_bytes += agent.ff[i].fc.packed_size();
-  }
+  const size_t ternary_bytes = stats.ternary_weights * sizeof(int8_t);
   const size_t float_bytes = stats.float_params * sizeof(float);
   const size_t total_param_bytes = ternary_bytes + float_bytes;
   const size_t activation_elems = estimate_forward_activation_elems(agent.cfg, B, S);
