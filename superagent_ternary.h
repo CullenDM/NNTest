@@ -8,6 +8,9 @@
 
 namespace superagent {
 
+// Q15 fixed-point scale for mLSTM C/n states (value = q15 / kQ15Scale).
+constexpr int32_t kQ15Scale = 32768;
+
 struct TernaryConfig {
   int vocab_size = 256;
   int compression_rate = 4;
@@ -93,7 +96,7 @@ struct TernarymLSTMCell {
         W_qkv(in_dim, hid_dim * 3, true, true, threshold),
         W_if(in_dim, 2, true, true, threshold) {}
 
-  void forward(const Tensor3 &x, Tensor3 &h_out, std::vector<float> &C, std::vector<float> &n) const;
+  void forward(const Tensor3 &x, Tensor3 &h_out, std::vector<int16_t> &C, std::vector<int16_t> &n) const;
 };
 
 struct TernaryLightningIndexer {

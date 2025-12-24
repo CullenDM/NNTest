@@ -1,5 +1,7 @@
 #include "superagent_ternary.h"
 
+#include <limits>
+
 namespace superagent {
 
 static inline float fast_gelu(float x) {
@@ -136,24 +138,51 @@ void IntSoftmax::forward(const std::vector<float> &x, int rows, int cols, std::v
   }
 }
 
+static inline int16_t clamp_q15(int32_t v) {
+  const int32_t min_v = std::numeric_limits<int16_t>::min();
+  const int32_t max_v = std::numeric_limits<int16_t>::max();
+  return static_cast<int16_t>(std::max(min_v, std::min(max_v, v)));
+}
+
+static inline int32_t float_to_q15(float v) {
+  const float scaled = v * static_cast<float>(kQ15Scale);
+  const long rounded = std::lround(scaled);
+  const long clamped = std::max(static_cast<long>(std::numeric_limits<int16_t>::min()),
+                                std::min(static_cast<long>(std::numeric_limits<int16_t>::max()), rounded));
+  return static_cast<int32_t>(clamped);
+}
+
 static void mlstm_scan(const Tensor3 &q, const Tensor3 &k, const Tensor3 &v,
                        const Tensor3 &i_gate, const Tensor3 &f_gate,
-                       std::vector<float> &C, std::vector<float> &n,
+                       std::vector<int16_t> &C, std::vector<int16_t> &n,
                        Tensor3 &h_out) {
   h_out = Tensor3(q.B, q.S, q.H);
   for (int b = 0; b < q.B; ++b) {
     for (int t = 0; t < q.S; ++t) {
       const float it = i_gate.at(b, t, 0);
       const float ft = f_gate.at(b, t, 0);
-      // Update C and n
+      const int32_t it_q15 = float_to_q15(it);
+      const int32_t ft_q15 = float_to_q15(ft);
+      // Q15 fixed-point update: q15_out = (ft_q15 * q15_prev + it_q15 * q15_input) / kQ15Scale.
+      // We accumulate in int32 and clamp back to int16 storage.
       for (int i = 0; i < q.H; ++i) {
         const float vt = v.at(b, t, i);
         const float kt = k.at(b, t, i);
+        const int32_t vt_q15 = float_to_q15(vt);
+        const int32_t kt_q15 = float_to_q15(kt);
         const size_t n_idx = (static_cast<size_t>(b) * q.H + i);
-        n[n_idx] = ft * n[n_idx] + it * kt;
+        const int32_t n_old = n[n_idx];
+        const int32_t n_acc = static_cast<int32_t>(
+            (static_cast<int64_t>(ft_q15) * n_old + static_cast<int64_t>(it_q15) * kt_q15) / kQ15Scale);
+        n[n_idx] = clamp_q15(n_acc);
         for (int j = 0; j < q.H; ++j) {
           const size_t c_idx = (static_cast<size_t>(b) * q.H + i) * q.H + j;
-          C[c_idx] = ft * C[c_idx] + it * vt * k.at(b, t, j);
+          const int32_t k_j_q15 = float_to_q15(k.at(b, t, j));
+          const int32_t c_old = C[c_idx];
+          const int64_t term1 = static_cast<int64_t>(ft_q15) * c_old;
+          const int64_t term2 = static_cast<int64_t>(it_q15) * vt_q15 * k_j_q15;
+          const int32_t c_acc = static_cast<int32_t>((term1 + term2 / kQ15Scale) / kQ15Scale);
+          C[c_idx] = clamp_q15(c_acc);
         }
       }
       // num = C * q
@@ -162,14 +191,16 @@ static void mlstm_scan(const Tensor3 &q, const Tensor3 &k, const Tensor3 &v,
         float acc = 0.0f;
         for (int j = 0; j < q.H; ++j) {
           const size_t c_idx = (static_cast<size_t>(b) * q.H + i) * q.H + j;
-          acc += C[c_idx] * q.at(b, t, j);
+          const float c_val = static_cast<float>(C[c_idx]) / static_cast<float>(kQ15Scale);
+          acc += c_val * q.at(b, t, j);
         }
         num[static_cast<size_t>(i)] = acc;
       }
       float den = 0.0f;
       for (int i = 0; i < q.H; ++i) {
         const size_t n_idx = (static_cast<size_t>(b) * q.H + i);
-        den += n[n_idx] * q.at(b, t, i);
+        const float n_val = static_cast<float>(n[n_idx]) / static_cast<float>(kQ15Scale);
+        den += n_val * q.at(b, t, i);
       }
       den = std::max(std::abs(den), 1.0f);
       for (int i = 0; i < q.H; ++i) {
@@ -179,7 +210,7 @@ static void mlstm_scan(const Tensor3 &q, const Tensor3 &k, const Tensor3 &v,
   }
 }
 
-void TernarymLSTMCell::forward(const Tensor3 &x, Tensor3 &h_out, std::vector<float> &C, std::vector<float> &n) const {
+void TernarymLSTMCell::forward(const Tensor3 &x, Tensor3 &h_out, std::vector<int16_t> &C, std::vector<int16_t> &n) const {
   Tensor3 qkv;
   W_qkv.forward(x, qkv);
   Tensor3 q(x.B, x.S, hidden_dim);
@@ -209,10 +240,10 @@ void TernarymLSTMCell::forward(const Tensor3 &x, Tensor3 &h_out, std::vector<flo
     }
   }
   if (C.empty()) {
-    C.assign(static_cast<size_t>(x.B) * hidden_dim * hidden_dim, 0.0f);
+    C.assign(static_cast<size_t>(x.B) * hidden_dim * hidden_dim, 0);
   }
   if (n.empty()) {
-    n.assign(static_cast<size_t>(x.B) * hidden_dim, 0.0f);
+    n.assign(static_cast<size_t>(x.B) * hidden_dim, 0);
   }
   mlstm_scan(q, k, v, i_gate, f_gate, C, n, h_out);
 }
@@ -497,8 +528,8 @@ void SuperAgent::forward(const std::vector<uint8_t> &byte_input, int B, int S, T
   }
 
   Tensor3 enc_feats;
-  std::vector<float> C_enc;
-  std::vector<float> n_enc;
+  std::vector<int16_t> C_enc;
+  std::vector<int16_t> n_enc;
   encoder.forward(x_emb, enc_feats, C_enc, n_enc);
 
   const int pad = (r - (S % r)) % r;
@@ -609,8 +640,8 @@ void SuperAgent::forward(const std::vector<uint8_t> &byte_input, int B, int S, T
   }
 
   Tensor3 dec_out;
-  std::vector<float> C_dec;
-  std::vector<float> n_dec;
+  std::vector<int16_t> C_dec;
+  std::vector<int16_t> n_dec;
   decoder.forward(dec_in, dec_out, C_dec, n_dec);
 
   Tensor3 logits_full;
