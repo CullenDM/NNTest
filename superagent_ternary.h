@@ -54,13 +54,13 @@ struct TernaryLinear {
   int out_f = 0;
   bool quantize_act = true;
   float threshold = 0.5f;
-  std::vector<int8_t> weight;  // {-1,0,1}
+  std::vector<uint8_t> weight_packed;  // 4 ternary weights per byte
   std::vector<float> bias;
 
   TernaryLinear() = default;
   TernaryLinear(int in_features, int out_features, bool use_bias = true, bool quantize_act_in = true, float threshold_in = 0.5f)
       : in_f(in_features), out_f(out_features), quantize_act(quantize_act_in), threshold(threshold_in),
-        weight(static_cast<size_t>(out_features) * in_features, 0),
+        weight_packed((static_cast<size_t>(out_features) * in_features + 3) / 4, 0),
         bias(use_bias ? static_cast<size_t>(out_features) : 0, 0.0f) {}
 
   void set_weight_ternary(const std::vector<float> &w, float threshold);

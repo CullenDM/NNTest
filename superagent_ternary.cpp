@@ -16,20 +16,62 @@ static inline float ternary_quant_val(float x, float threshold) {
   return 0.0f;
 }
 
+static inline uint8_t encode_ternary(int8_t value) {
+  switch (value) {
+    case 1:
+      return 0x1;
+    case -1:
+      return 0x2;
+    default:
+      return 0x0;
+  }
+}
+
+static inline int8_t decode_ternary(uint8_t bits) {
+  switch (bits & 0x3u) {
+    case 0x1:
+      return 1;
+    case 0x2:
+      return -1;
+    default:
+      return 0;
+  }
+}
+
+static std::vector<uint8_t> pack_ternary_weights(const std::vector<int8_t> &weights) {
+  std::vector<uint8_t> packed((weights.size() + 3) / 4, 0);
+  for (size_t i = 0; i < weights.size(); ++i) {
+    const size_t byte_index = i / 4;
+    const size_t shift = (i % 4) * 2;
+    packed[byte_index] |= static_cast<uint8_t>(encode_ternary(weights[i]) << shift);
+  }
+  return packed;
+}
+
+static inline int8_t get_packed_weight(const std::vector<uint8_t> &packed, size_t idx) {
+  const size_t byte_index = idx / 4;
+  const size_t shift = (idx % 4) * 2;
+  const uint8_t bits = static_cast<uint8_t>((packed[byte_index] >> shift) & 0x3u);
+  return decode_ternary(bits);
+}
+
 void TernaryLinear::set_weight_ternary(const std::vector<float> &w, float threshold) {
-  if (w.size() != weight.size()) {
+  const size_t weight_count = static_cast<size_t>(in_f) * out_f;
+  if (w.size() != weight_count) {
     return;
   }
+  std::vector<int8_t> ternary(weight_count, 0);
   for (size_t i = 0; i < w.size(); ++i) {
     const float val = w[i];
     if (val > threshold) {
-      weight[i] = 1;
+      ternary[i] = 1;
     } else if (val < -threshold) {
-      weight[i] = -1;
+      ternary[i] = -1;
     } else {
-      weight[i] = 0;
+      ternary[i] = 0;
     }
   }
+  weight_packed = pack_ternary_weights(ternary);
 }
 
 void TernaryLinear::forward(const Tensor3 &x, Tensor3 &out) const {
@@ -40,8 +82,8 @@ void TernaryLinear::forward(const Tensor3 &x, Tensor3 &out) const {
         float acc = bias.empty() ? 0.0f : bias[static_cast<size_t>(o)];
         const size_t w_base = static_cast<size_t>(o) * in_f;
         for (int i = 0; i < in_f; ++i) {
-          const int8_t w = weight[w_base + static_cast<size_t>(i)];
-          const float x_val = quantize_act ? ternary_quant_val(x.at(b, s, i), threshold) : x.at(b, s, i);
+          const int8_t w = get_packed_weight(weight_packed, w_base + static_cast<size_t>(i));
+          const float x_val = ternary_quant_val(x.at(b, s, i), threshold);
           if (w == 1) {
             acc += x_val;
           } else if (w == -1) {
